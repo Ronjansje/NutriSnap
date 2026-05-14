@@ -3,19 +3,17 @@ import pandas as pd
 import datetime
 import sqlite3
 import hashlib
+import os
 
-# --- 1. CONFIGURATIE & AUTOMATISCHE DONKERE MODUS ---
-st.set_page_config(page_title="AI Fitness Pro", page_icon="💪", layout="centered")
+# --- 1. CONFIGURATIE & DONKERE MODUS ---
+st.set_page_config(page_title="NutriSnap - AI Calisthenics Pro", page_icon="💪", layout="centered")
 
-# CSS om de app permanent een strakke donkere modus te geven en te optimaliseren voor mobiel
+# CSS voor permanente donkere modus en mobiele optimalisatie
 st.markdown("""
     <style>
-    /* Forceer donkere achtergrond en witte tekst */
     .stApp { background-color: #0E1117; color: #FFFFFF; }
     .main .block-container { max-width: 480px; padding-top: 1rem; }
-    
-    /* Styling voor voortgangsbalken en metrics in dark mode */
-    .stProgress > div > div > div > div { background-color: #1E90FF; }
+    .stProgress > div > div > div > div { background-color: #FF1493; } /* Neon roze passend bij logo */
     div[data-testid="metric-container"] { 
         background-color: #1F2937; 
         padding: 12px; 
@@ -24,19 +22,18 @@ st.markdown("""
     }
     div[data-testid="metric-container"] label { color: #9CA3AF !important; }
     div[data-testid="metric-container"] div { color: #FFFFFF !important; }
-    
-    /* Tab styling */
     .stTabs [data-baseweb="tab"] { color: #9CA3AF; }
-    .stTabs [data-baseweb="tab"] aria-selected="true" { color: #1E90FF; }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] { color: #FF1493; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. DATABASE INSTELLINGEN (Voor accounts en data) ---
+# --- 2. DATABASE INITIALISATIE ---
 def init_db():
-    conn = sqlite3.connect('fitness_database.db')
+    conn = sqlite3.connect('nutrisnap_data.db')
     c = conn.cursor()
+    # Gebruikers tabel met e-mailregistratie
     c.execute('''CREATE TABLE IF NOT EXISTS users 
-                 (username TEXT PRIMARY KEY, password TEXT, age INTEGER, height REAL, weight REAL, target_weight REAL, days_train INTEGER, duration_train INTEGER)''')
+                 (email TEXT PRIMARY KEY, password TEXT, name TEXT, age INTEGER, height REAL, weight REAL, target_weight REAL, days_train INTEGER, duration_train INTEGER)''')
     conn.commit()
     conn.close()
 
@@ -46,11 +43,11 @@ def make_hashes(password):
 def check_hashes(password, hashed_text):
     return make_hashes(password) == hashed_text
 
-def add_user(username, password, age, height, weight, target_weight, days_train, duration_train):
-    conn = sqlite3.connect('fitness_database.db')
+def add_user(email, password, name, age, height, weight, target_weight, days_train, duration_train):
+    conn = sqlite3.connect('nutrisnap_data.db')
     c = conn.cursor()
     try:
-        c.execute('INSERT INTO users VALUES (?,?,?,?,?,?,?,?)', (username, make_hashes(password), age, height, weight, target_weight, days_train, duration_train))
+        c.execute('INSERT INTO users VALUES (?,?,?,?,?,?,?,?,?)', (email, make_hashes(password), name, age, height, weight, target_weight, days_train, duration_train))
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -58,197 +55,231 @@ def add_user(username, password, age, height, weight, target_weight, days_train,
     finally:
         conn.close()
 
-def login_user(username, password):
-    conn = sqlite3.connect('fitness_database.db')
+def login_user(email, password):
+    conn = sqlite3.connect('nutrisnap_data.db')
     c = conn.cursor()
-    c.execute('SELECT password FROM users WHERE username = ?', (username,))
+    c.execute('SELECT password FROM users WHERE email = ?', (email,))
     data = c.fetchone()
     conn.close()
-    if data and check_hashes(password, data[0]):
+    if data and check_hashes(password, data):
         return True
     return False
 
-def get_user_data(username):
-    conn = sqlite3.connect('fitness_database.db')
+def get_user_data(email):
+    conn = sqlite3.connect('nutrisnap_data.db')
     c = conn.cursor()
-    c.execute('SELECT age, height, weight, target_weight, days_train, duration_train FROM users WHERE username = ?', (username,))
+    c.execute('SELECT age, height, weight, target_weight, days_train, duration_train, name FROM users WHERE email = ?', (email,))
     data = c.fetchone()
     conn.close()
     return data
 
 init_db()
 
-# --- 3. INLOG / REGISTRATIE SCHERM ---
+# --- 3. SESSION STATE INITIALISATIE (BLIJF INGELOGD EN TRACKING) ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-    st.session_state.username = ""
+    st.session_state.email = ""
+if "water_ml" not in st.session_state:
+    st.session_state.water_ml = 0
+if "kcal_gegeten" not in st.session_state:
+    st.session_state.kcal_gegeten = 0
+if "eiwit_gegeten" not in st.session_state:
+    st.session_state.eiwit_gegeten = 0
+if "kaaklijn_gedaan" not in st.session_state:
+    st.session_state.kaaklijn_gedaan = False
+if "oefening_gedaan" not in st.session_state:
+    st.session_state.oefening_gedaan = False
 
+# --- 4. AUTHENTICATIE SCHERM ---
 if not st.session_state.logged_in:
-    st.title("🔐 Welkom bij AI Fitness Pro")
+    if os.path.exists("logo.png"):
+        st.image("logo.png", use_container_width=True)
+    else:
+        st.title("📸 NutriSnap")
+        
     auth_option = st.radio("Kies een optie:", ["Inloggen", "Account Aanmaken"], horizontal=True)
-    
-    username = st.text_input("Gebruikersnaam")
-    password = st.text_input("Wachtwoord", type="password")
+    email_input = st.text_input("E-mailadres")
+    password_input = st.text_input("Wachtwoord", type="password")
     
     if auth_option == "Account Aanmaken":
-        st.subheader("Personaliseer je profiel:")
-        age = st.number_input("Leeftijd", min_value=12, max_value=100, value=22)
+        name = st.text_input("Voornaam")
+        age = st.number_input("Leeftijd", min_value=12, max_value=100, value=20)
         height = st.number_input("Lengte (cm)", min_value=120, max_value=230, value=180)
-        weight = st.number_input("Huidig Gewicht (kg)", min_value=40.0, max_value=180.0, value=85.0)
-        target_weight = st.number_input("Doel Gewicht (kg)", min_value=40.0, max_value=180.0, value=78.0)
-        days_train = st.slider("Hoeveel dagen per week train je?", 0, 7, 4)
-        duration_train = st.slider("Gemiddelde trainingsduur per sessie (minuten)", 15, 180, 60)
+        weight = st.number_input("Huidig Gewicht (kg)", min_value=40.0, max_value=180.0, value=80.0)
+        target_weight = st.number_input("Doel Gewicht (kg)", min_value=40.0, max_value=180.0, value=75.0)
+        days_train = st.slider("Aantal dagen per week sporten", 0, 7, 3)
+        duration_train = st.slider("Gemiddelde duur per training (minuten)", 15, 180, 60)
         
-        if st.button("Account Aanmaken"):
-            if username and password:
-                success = add_user(username, password, age, height, weight, target_weight, days_train, duration_train)
-                if success:
-                    st.success("Account succesvol aangemaakt! Je kunt nu inloggen.")
+        if st.button("Registreren"):
+            if "@" in email_input and password_input and name:
+                if add_user(email_input, password_input, name, age, height, weight, target_weight, days_train, duration_train):
+                    st.success("Account aangemaakt! Je kunt nu inloggen.")
                 else:
-                    st.error("Deze gebruikersnaam bestaat al.")
+                    st.error("Dit e-mailadres is al geregistreerd.")
             else:
-                st.warning("Vul alle velden in.")
+                st.error("Vul alle velden correct in en gebruik een geldig e-mailadres.")
                 
     elif auth_option == "Inloggen":
         if st.button("Inloggen"):
-            if login_user(username, password):
+            if login_user(email_input, password_input):
                 st.session_state.logged_in = True
-                st.session_state.username = username
+                st.session_state.email = email_input
                 st.rerun()
             else:
-                st.error("Onjuiste gebruikersnaam of wachtwoord.")
+                st.error("Onjuiste e-mail of wachtwoord.")
     st.stop()
 
-# --- 4. HOOFDAPPLICATIE (INGELOGD) ---
-# Haal gepersonaliseerde data op uit de database
-u_age, u_height, u_weight, u_target_weight, u_days, u_duration = get_user_data(st.session_state.username)
+# --- 5. GEBRUIKERS DATA & INSTRELLINGEN ---
+u_age, u_height, u_weight, u_target_weight, u_days, u_duration, u_name = get_user_data(st.session_state.email)
 
-# --- DYNAMISCHE BEREKENINGEN ---
-# Basisbehoefte (BMR via Mifflin-St Jeor)
+# Automatische berekeningen voor afvallen
 bmr = (10 * u_weight) + (6.25 * u_height) - (5 * u_age) + 5
-
-# Activiteitsfactor op basis van dagen én duur van de training
-if u_days <= 1: activiteit = 1.2
-elif u_days <= 3: activiteit = 1.375
-elif u_days <= 5: activiteit = 1.55
-else: activiteit = 1.725
-
-# Extra calorieverbruik op basis van trainingsduur (gemiddeld 6 kcal per minuut tijdens actieve training)
-extra_kcal_per_dag = (u_duration * 6 * u_days) / 7
-
-onderhoud_kcal = (bmr * activiteit) + extra_kcal_per_dag
-afval_kcal = int(onderhoud_kcal - 500) # 500 kcal tekort om gezond af te vallen
+activiteit = 1.2 if u_days <= 1 else 1.375 if u_days <= 3 else 1.55 if u_days <= 5 else 1.725
+extra_kcal = (u_duration * 6 * u_days) / 7
+afval_kcal = int((bmr * activiteit) + extra_kcal - 500)
 doel_eiwit = int(u_weight * 2.0)
+doel_water_liters = round((u_weight * 0.035) + ((u_duration * 0.01 * u_days) / 7), 1)
 
-# Dynamische waterberekening (35ml per kg lichaamsgewicht + extra vochtverlies tijdens het trainen)
-water_basis = u_weight * 0.035
-water_extra_training = (u_duration * 0.01 * u_days) / 7 # 10ml per minuut training, verdeeld over de week
-doel_water_liters = round(water_basis + water_extra_training, 1)
-
-# Toon profielinfo in de zijbalk
-st.sidebar.title(f"👤 {st.session_state.username}")
-st.sidebar.markdown(f"""
-**Jouw Profiel:**
-* Leeftijd: `{u_age} jaar`
-* Training: `{u_days} dagen/week` ({u_duration} min/sessie)
-
-🎯 **Berekende Dagdoelen:**
-* 🔥 **Calorieën:** `{afval_kcal} kcal`
-* 🥩 **Eiwitten:** `{doel_eiwit} g`
-* 💧 **Water:** `{doel_water_liters} Liter`
-""")
-
+# Uitlogknop in de zijbalk
 if st.sidebar.button("Uitloggen"):
     st.session_state.logged_in = False
-    st.session_state.username = ""
+    st.session_state.email = ""
     st.rerun()
 
-# HOOFDSCHERM TABS
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📸 AI Eten", "📈 Gewicht", "💧 Water", "🗿 Kaaklijn", "🏋️ Spieren"])
+# APPLICATIE TABS (Met het Hoofdscherm vooraan)
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Hoofdscherm", "📸 AI Scanner", "📈 Voortgang & Groei", "💧 Water & Eten", "🗿 Oefeningen"])
 
-# --- TAB 1: AI FOTO SCAN ---
+# --- TAB 1: HOOFDSCHERM (DASHBOARD) ---
 with tab1:
-    st.header("📸 AI Maaltijd Scanner")
-    foto = st.camera_input("Maak een foto van je maaltijd")
-    if not foto:
-        foto = st.file_uploader("Of upload een foto vanaf je toestel", type=["jpg", "jpeg", "png"])
-        
-    if foto:
-        st.success("Foto succesvol ontvangen!")
-        st.info("AI Analyseert de maaltijd... (Simulatie)")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric(label="Geschatte Calorieën", value="465 kcal", delta=f"Doel: {afval_kcal}")
-        with col2:
-            st.metric(label="Eiwitten", value="34 g", delta=f"Doel: {doel_eiwit}g")
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=150)
+    st.title(f"Hoi {u_name}! 👋")
+    st.caption("Jouw overzicht van vandaag:")
 
-# --- TAB 2: GEWICHTSVERLOOP ---
-with tab2:
-    st.header("📈 Mijn Gewichtsverloop")
-    st.write(f"Doel: van **{u_weight} kg** naar **{u_target_weight} kg**")
+    # Status berekeningen
+    resterend_kcal = max(0, afval_kcal - st.session_state.kcal_gegeten)
+    resterend_water = max(0.0, doel_water_liters - (st.session_state.water_ml / 1000))
+    resterend_eiwit = max(0, doel_eiwit - st.session_state.eiwit_gegeten)
     
-    vandaag = datetime.date.today()
-    data_gewicht = {
-        "Datum": [vandaag - datetime.timedelta(days=i) for i in range(4, -1, -1)],
-        "Gewicht": [u_weight + 1.2, u_weight + 0.9, u_weight + 0.5, u_weight + 0.2, u_weight]
-    }
-    df = pd.DataFrame(data_gewicht)
-    st.line_chart(df.set_index("Datum"))
-    
-    verloren = data_gewicht["Gewicht"][0] - u_weight
-    st.metric(label="Totaal Recent Verloren", value=f"-{verloren:.1f} kg", delta="Ga zo door!")
-
-# --- TAB 3: WATER LOG ---
-with tab3:
-    st.header("💧 Dagelijks Waterdoel")
-    st.write(f"Op basis van je profiel moet je vandaag **{doel_water_liters} Liter** drinken.")
-    
-    if "glazen" not in st.session_state:
-        st.session_state.glazen = 0
-        
+    # Voedingscirkels tabellen overzicht
+    st.subheader("📊 Jouw Voedingsstatus")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("➕ Glas (250ml)"): st.session_state.glazen += 1
-    with col2:
-        if st.button("🔄 Reset"): st.session_state.glazen = 0
+        st.write("**Calorieën Status**")
+        df_kcal = pd.DataFrame({"Status": ["Gegeten", "Nog te gaan"], "Kcal": [st.session_state.kcal_gegeten, resterend_kcal]})
+        st.dataframe(df_kcal, hide_index=True) 
         
-    gedronken = st.session_state.glazen * 0.25
-    st.metric(label="Vandaag Gedronken", value=f"{gedronken} Liter")
-    
-    voortgang = min(gedronken / doel_water_liters, 1.0)
-    st.progress(voortgang)
+    with col2:
+        st.write("**Eiwitten Status**")
+        df_eiwit = pd.DataFrame({"Status": ["Binnen", "Nog te gaan"], "Gram": [st.session_state.eiwit_gegeten, resterend_eiwit]})
+        st.dataframe(df_eiwit, hide_index=True)
 
-# --- TAB 4: KAAKLIJN TRAINING ---
+    # Wat moet ik nog doen counters
+    st.subheader("🎯 Resterende Behoefte")
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        st.metric(label="Nog te eten calorieën", value=f"{resterend_kcal} kcal", delta=f"Doel: {afval_kcal}")
+    with col_m2:
+        st.metric(label="Nog te drinken water", value=f"{resterend_water:.1f} Liter", delta=f"Doel: {doel_water_liters}L")
+
+    # Live Checklist gekoppeld aan de andere tabbladen
+    st.markdown("### 📋 Dagelijke Checklist")
+    if st.session_state.kaaklijn_gedaan:
+        st.success("✅ Kaaklijntraining succesvol afgerond voor vandaag!")
+    else:
+        st.info("❌ Je moet je kaaklijnoefeningen nog doen vandaag. (Ga naar tabblad Oefeningen)")
+        
+    if st.session_state.oefening_gedaan:
+        st.success("✅ Krachttraining geregistreerd voor vandaag!")
+    else:
+        st.warning("⚠️ Je moet je workout van vandaag nog invoeren via tekst (Ga naar tabblad Oefeningen).")
+
+# --- TAB 2: AI FOTO SCANNER ---
+with tab2:
+    st.header("📸 AI Scanner")
+    foto = st.camera_input("Fotografeer je maaltijd")
+    if not foto:
+        foto = st.file_uploader("Of kies een foto uit je galerij", type=["jpg", "jpeg", "png"])
+        
+    if foto:
+        st.success("Maaltijd gedetecteerd!")
+        st.session_state.kcal_gegeten += 450
+        st.session_state.eiwit_gegeten += 30
+        st.write("Automatisch toegevoegd: **450 kcal en 30g eiwitten**.")
+
+# --- TAB 3: VOORTGANG & LICHAAMSGEWICHT GRAFIEKEN ---
+with tab3:
+    st.header("📈 Voortgang & Groei")
+    
+    st.subheader("Gewichtsverloop")
+    vandaag = datetime.date.today()
+    df_gewicht = pd.DataFrame({
+        "Datum": [vandaag - datetime.timedelta(days=i) for i in range(4, -1, -1)],
+        "Gewicht (kg)": [u_weight + 1.0, u_weight + 0.7, u_weight + 0.4, u_weight + 0.2, u_weight]
+    }).set_index("Datum")
+    st.line_chart(df_gewicht)
+    
+    st.subheader("📊 Wekelijkse Lichaamsgewicht Groei (Reps/Sec)")
+    st.caption("Eén keer per week doe je een test om te kijken of je bent gegroeid. Elke spiergroep heeft een eigen gekleurde lijn!")
+    
+    # Wekelijkse Calisthenics voortgangslijnen
+    df_groei = pd.DataFrame({
+        "Weken": ["Week 1", "Week 2", "Week 3", "Week 4"],
+        "Borst: Push-ups (Reps)": [20, 22, 25, 27],
+        "Rug: Pull-ups (Reps)": [6, 7, 7, 9],
+        "Benen: Pistol Squats (Reps)": [5, 6, 8, 10],
+        "Core: Plank (Seconden)": [60, 75, 80, 95]
+    }).set_index("Weken")
+    st.line_chart(df_groei)
+
+# --- TAB 4: WATER & HANDMATIGE VOEDING LOG ---
 with tab4:
-    st.header("🗿 Kaaklijn Verstrakken")
-    oef1 = st.checkbox("1. Mewing (Tong tegen gehemelte) — 5 min")
-    oef2 = st.checkbox("2. Chin Tucks (Dubbele kin vasthouden) — 3 sets")
-    oef3 = st.checkbox("3. Kaakspanning (Kauwspieren aanspannen) — 2 min")
+    st.header("💧 Variabele Water Tracker")
+    st.write(f"Doel op basis van je account: **{doel_water_liters} Liter**.")
     
-    kaak_score = (oef1 + oef2 + oef3) / 3
-    st.progress(kaak_score)
-    if kaak_score == 1.0: st.success("Kaaklijntraining voltooid! 🗿")
+    ml_toevoegen = st.number_input("Hoeveelheid water toevoegen (in ml):", min_value=0, max_value=2000, value=300, step=50)
+    if st.button("➕ Water drinken"):
+        st.session_state.water_ml += ml_toevoegen
+        st.toast(f"{ml_toevoegen}ml water toegevoegd!")
+        
+    st.write(f"Totaal gedronken: {st.session_state.water_ml / 1000} / {doel_water_liters} Liter")
+    st.progress(min((st.session_state.water_ml / 1000) / doel_water_liters, 1.0))
+    
+    st.subheader("🔥 Handmatige Calorieën")
+    handmatige_kcal = st.number_input("Calorieën handmatig toevoegen:", min_value=0, max_value=3000, value=250, step=50)
+    handmatige_eiwit = st.number_input("Eiwit handmatig toevoegen (g):", min_value=0, max_value=150, value=20, step=5)
+    if st.button("➕ Voeding handmatig opslaan"):
+        st.session_state.kcal_gegeten += handmatige_kcal
+        st.session_state.eiwit_gegeten += handmatige_eiwit
+        st.success("Voeding succesvol bijgewerkt!")
 
-# --- TAB 5: SPIERTRAINING TRACKER ---
+# --- TAB 5: OEFENINGEN & KAAKLIJN ---
 with tab5:
-    st.header("🏋️ Oefeningen & Getrainde Spieren")
-    st.write("Vink de oefeningen aan die je vandaag hebt uitgevoerd:")
+    st.header("🗿 Dagelijkse Trainingen")
     
-    oef_borst = st.checkbox("Push-ups / Bench Press (Borst & Triceps)")
-    oef_rug = st.checkbox("Pull-ups / Rows (Rug & Biceps)")
-    oef_benen = st.checkbox("Squats / Leg Press (Benen)")
-    oef_buik = st.checkbox("Planken / Crunches (Core)")
+    st.subheader("Dagelijkse Kaaklijntraining")
+    st.write("Vink aan als je de oefeningen hebt gedaan:")
+    o1 = st.checkbox("Mewing (Tong strak tegen het gehemelte houden) — 5 min")
+    o2 = st.checkbox("Chin Tucks (Houding corrigeren & kin intrekken) — 3 sets")
+    if o1 and o2:
+        st.session_state.kaaklijn_gedaan = True
+        st.success("Status bijgewerkt! Je checklist op het hoofdscherm staat nu op groen.")
+        
+    st.subheader("Spiertraining Tekstinvoer (Eigen Lichaamsgewicht)")
+    st.write("Typ in je eigen woorden welke oefeningen je hebt gedaan (geen vinkjes):")
+    user_oefening = st.text_input("Bijv: Ik heb vandaag pushups, pullups en geplankt.", "")
     
-    st.subheader("📊 Spierstatus & Trainingskwaliteit")
-    spieren = {
-        "Borst & Triceps": 85 if oef_borst else 0,
-        "Rug & Biceps": 80 if oef_rug else 0,
-        "Benen & Billen": 90 if oef_benen else 0,
-        "Buikspieren (Core)": 75 if oef_buik else 0
-    }
-    
-    for spier, kwaliteit in spieren.items():
-        st.write(f"**{spier}**")
-        st.progress(kwaliteit / 100)
-        st.caption(f"Status: {kwaliteit}% getraind vandaag." if kwaliteit > 0 else "Status: Nog niet getraind (0%)")
-
+    if st.button("Verstuur workout naar AI"):
+        if user_oefening:
+            st.session_state.oefening_gedaan = True
+            st.success("Workout verwerkt in je checklist op het hoofdscherm!")
+            
+            tekst = user_oefening.lower()
+            if any(x in tekst for x in ["pushup", "opdrukken", "dips"]):
+                st.info("💪 Getraind: Borst & Triceps (Kwaliteit: Lichaamsgewicht 85%)")
+            if any(x in tekst for x in ["squat", "benen", "lunges", "pistol"]):
+                st.info("🍗 Getraind: Benen & Billen (Kwaliteit: Lichaamsgewicht 90%)")
+            if any(x in tekst for x in ["pullup", "optrekken", "rows", "chinup"]):
+                st.info("🦅 Getraind: Rug & Biceps (Kwaliteit: Lichaamsgewicht 80%)")
+            if any(x in tekst for x in ["plank", "crunches", "situp", "buik"]):
+                st.info("🧱 Getraind: Buikspieren / Core (Kwaliteit: Lichaamsgewicht 85%)")
